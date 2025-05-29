@@ -1,6 +1,7 @@
 name: Add issue to Project v2
 
 on:
+  workflow_dispatch:
   issues:
     types: [opened]
 
