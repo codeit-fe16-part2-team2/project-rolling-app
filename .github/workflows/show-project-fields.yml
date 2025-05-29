@@ -10,7 +10,7 @@ jobs:
     permissions:
       contents: read
       issues: read
-      project-beta: read
+      pull-requests: read
 
     steps:
       - name: Show project fields
@@ -18,8 +18,8 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const org = "codeit-fe16-part2-team2";  // ← 조직 이름 수정
-            const projectNumber = 1;                // ← 프로젝트 번호 수정
+            const org = "codeit-fe16-part2-team2";  // ← 조직 이름
+            const projectNumber = 1;                // ← 프로젝트 번호
 
             const query = `
               query($login: String!, $number: Int!) {
