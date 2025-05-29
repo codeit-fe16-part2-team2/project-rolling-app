@@ -1,14 +1,14 @@
-name: Set Status to Todo on Issue Creation
+name: Add new issue to Project v2 with Status = Todo
 
 on:
   issues:
     types: [opened]
 
 jobs:
-  set-status:
+  add-to-project:
     runs-on: ubuntu-latest
     steps:
-      - name: Set Status = Todo in Project v2
+      - name: Add issue to Project v2 and set Status
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -17,6 +17,7 @@ jobs:
             const org = "codeit-fe16-part2-team2";
             const projectNumber = 1;
 
+            // 1. Get Project info, Status field, and "Todo" option
             const { organization } = await github.graphql(`
               query ($org: String!, $projectNumber: Int!) {
                 organization(login: $org) {
@@ -34,34 +35,38 @@ jobs:
                         }
                       }
                     }
-                    items(first: 100) {
-                      nodes {
-                        id
-                        content {
-                          ... on Issue {
-                            id
-                          }
-                        }
-                      }
-                    }
                   }
                 }
               }
             `, { org, projectNumber });
 
             const project = organization.projectV2;
-            const item = project.items.nodes.find(i => i.content?.id === issueNodeId);
-            if (!item) return;
-
             const statusField = project.fields.nodes.find(f => f.name === "Status");
-            const todoOption = statusField.options.find(opt => opt.name === "Todo");
+            const todoOption = statusField?.options.find(opt => opt.name === "Todo");
             if (!statusField || !todoOption) return;
 
+            // 2. Add the issue to the project
+            const addResult = await github.graphql(`
+              mutation {
+                addProjectV2ItemById(input: {
+                  projectId: "${project.id}",
+                  contentId: "${issueNodeId}"
+                }) {
+                  item {
+                    id
+                  }
+                }
+              }
+            `);
+
+            const itemId = addResult.addProjectV2ItemById.item.id;
+
+            // 3. Set Status = Todo
             await github.graphql(`
               mutation {
                 updateProjectV2ItemFieldValue(input: {
                   projectId: "${project.id}",
-                  itemId: "${item.id}",
+                  itemId: "${itemId}",
                   fieldId: "${statusField.id}",
                   value: {
                     singleSelectOptionId: "${todoOption.id}"
