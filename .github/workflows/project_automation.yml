@@ -1,0 +1,165 @@
+name: Project V2 Automation
+
+on:
+  issues:
+    types: [opened]
+  pull_request:
+    types: [closed]
+
+jobs:
+  handle-issues:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    steps:
+      - name: Add issue to Project V2 with status = Todo
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GH_TOKEN }}
+          script: |
+            const issueNodeId = context.payload.issue.node_id;
+            const username = "Chiman2937";
+            const projectNumber = 6; // 수정: 본인의 Project 번호
+
+            const { user } = await github.graphql(`
+              query($login: String!, $number: Int!) {
+                user(login: $login) {
+                  projectV2(number: $number) {
+                    id
+                    fields(first: 20) {
+                      nodes {
+                        ... on ProjectV2SingleSelectField {
+                          id
+                          name
+                          options {
+                            id
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `, { login: username, number: projectNumber });
+
+            const project = user.projectV2;
+            const statusField = project.fields.nodes.find(f => f.name === "Status");
+            const todoOption = statusField.options.find(o => o.name === "Todo");
+
+            const addResult = await github.graphql(`
+              mutation {
+                addProjectV2ItemById(input: {
+                  projectId: "${project.id}",
+                  contentId: "${issueNodeId}"
+                }) {
+                  item {
+                    id
+                  }
+                }
+              }
+            `);
+
+            const itemId = addResult.addProjectV2ItemById.item.id;
+
+            await github.graphql(`
+              mutation {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: "${project.id}",
+                  itemId: "${itemId}",
+                  fieldId: "${statusField.id}",
+                  value: {
+                    singleSelectOptionId: "${todoOption.id}"
+                  }
+                }) {
+                  projectV2Item {
+                    id
+                  }
+                }
+              }
+            `);
+
+  handle-closed-pr:
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    steps:
+      - name: Update linked issues to status = Done
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GH_TOKEN }}
+          script: |
+            const username = "Chiman2937";
+            const projectNumber = 6;
+            const prBody = context.payload.pull_request.body;
+            const issueNumbers = [...prBody.matchAll(/fixes\s+#(\d+)/gi)].map(m => m[1]);
+
+            const { user } = await github.graphql(`
+              query($login: String!, $number: Int!) {
+                user(login: $login) {
+                  projectV2(number: $number) {
+                    id
+                    fields(first: 20) {
+                      nodes {
+                        ... on ProjectV2SingleSelectField {
+                          id
+                          name
+                          options {
+                            id
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `, { login: username, number: projectNumber });
+
+            const project = user.projectV2;
+            const statusField = project.fields.nodes.find(f => f.name === "Status");
+            const doneOption = statusField.options.find(o => o.name === "Done");
+
+            for (const number of issueNumbers) {
+              const issue = await github.rest.issues.get({
+                owner: username,
+                repo: context.repo.repo,
+                issue_number: number
+              });
+
+              const issueNodeId = issue.data.node_id;
+
+              const result = await github.graphql(`
+                mutation {
+                  addProjectV2ItemById(input: {
+                    projectId: "${project.id}",
+                    contentId: "${issueNodeId}"
+                  }) {
+                    item {
+                      id
+                    }
+                  }
+                }
+              `);
+
+              const itemId = result.addProjectV2ItemById.item.id;
+
+              await github.graphql(`
+                mutation {
+                  updateProjectV2ItemFieldValue(input: {
+                    projectId: "${project.id}",
+                    itemId: "${itemId}",
+                    fieldId: "${statusField.id}",
+                    value: {
+                      singleSelectOptionId: "${doneOption.id}"
+                    }
+                  }) {
+                    projectV2Item {
+                      id
+                    }
+                  }
+                }
+              `);
+            }
