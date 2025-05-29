@@ -1,0 +1,75 @@
+name: Set Status to Todo on Issue Creation
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  set-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set Status = Todo in Project v2
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issueNodeId = context.payload.issue.node_id;
+            const org = "codeit-fe16-part2-team2";
+            const projectNumber = 1;
+
+            const { organization } = await github.graphql(`
+              query ($org: String!, $projectNumber: Int!) {
+                organization(login: $org) {
+                  projectV2(number: $projectNumber) {
+                    id
+                    fields(first: 20) {
+                      nodes {
+                        ... on ProjectV2SingleSelectField {
+                          id
+                          name
+                          options {
+                            id
+                            name
+                          }
+                        }
+                      }
+                    }
+                    items(first: 100) {
+                      nodes {
+                        id
+                        content {
+                          ... on Issue {
+                            id
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `, { org, projectNumber });
+
+            const project = organization.projectV2;
+            const item = project.items.nodes.find(i => i.content?.id === issueNodeId);
+            if (!item) return;
+
+            const statusField = project.fields.nodes.find(f => f.name === "Status");
+            const todoOption = statusField.options.find(opt => opt.name === "Todo");
+            if (!statusField || !todoOption) return;
+
+            await github.graphql(`
+              mutation {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: "${project.id}",
+                  itemId: "${item.id}",
+                  fieldId: "${statusField.id}",
+                  value: {
+                    singleSelectOptionId: "${todoOption.id}"
+                  }
+                }) {
+                  projectV2Item {
+                    id
+                  }
+                }
+              }
+            `);
