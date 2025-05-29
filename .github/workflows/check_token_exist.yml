@@ -1,0 +1,19 @@
+name: Check GH_TOKEN Exists
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check-secret:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check GH_TOKEN is set
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "❌ GH_TOKEN is NOT set."
+            exit 1
+          else
+            echo "✅ GH_TOKEN is set."
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
