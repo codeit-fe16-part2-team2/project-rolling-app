@@ -26,81 +26,11 @@ jobs:
               "Content-Type": "application/json"
             };
 
-            if (context.eventName === "pull_request" && context.payload.action === "closed") {
-              const pr = context.payload.pull_request;
-              const prBody = pr.body || "";
-              const prUrl = pr.html_url;
-              const issueMatches = prBody.match(/(?:Fixes|Closes|Resolves):? #\d+/gi);
-              if (!issueMatches) return;
-
-              for (const match of issueMatches) {
-                const issueNumber = match.match(/\d+/)[0];
-
-                const issueRes = await fetch(`https://api.github.com/repos/${context.repo.owner}/${context.repo.repo}/issues/${issueNumber}`, {
-                  headers: { Authorization: `Bearer ${process.env.GH_TOKEN}` }
-                });
-                const issueData = await issueRes.json();
-                const issueTitle = issueData.title;
-
-                const notionSearch = await fetch("https://api.notion.com/v1/databases/" + process.env.NOTION_DATABASE_ID + "/query", {
-                  method: "POST",
-                  headers: notionHeaders,
-                  body: JSON.stringify({
-                    filter: {
-                      property: "Name",
-                      title: { equals: issueTitle }
-                    }
-                  })
-                });
-                const notionResult = await notionSearch.json();
-                if (notionResult.results.length === 0) continue;
-
-                const pageId = notionResult.results[0].id;
-
-                const notionPage = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
-                  method: "GET",
-                  headers: notionHeaders
-                });
-                const notionData = await notionPage.json();
-                const existingPRText = notionData.properties?.PR_URL?.rich_text?.map(rt => rt.plain_text).join('\n') || "";
-                const updatedText = existingPRText
-                  ? `${existingPRText}\n${prUrl}`
-                  : prUrl;
-
-                const updateRes = await fetch("https://api.notion.com/v1/pages/" + pageId, {
-                  method: "PATCH",
-                  headers: notionHeaders,
-                  body: JSON.stringify({
-                    properties: {
-                      PR_URL: {
-                        rich_text: [
-                          {
-                            text: { content: updatedText }
-                          }
-                        ]
-                      },
-                      Status: {
-                        select: { name: "Done" }
-                      }
-                    }
-                  })
-                });
-
-                if (!updateRes.ok) {
-                  const errorText = await updateRes.text();
-                  throw new Error(`❌ PR URL 저장 실패: ${updateRes.status} ${errorText}`);
-                } else {
-                  console.log(`✅ PR URL 저장 완료: ${prUrl}`);
-                }
-              }
-              return;
-            }
-
             const issue = context.payload.issue;
             const action = context.payload.action;
 
             const createdDate = new Date(issue.created_at).toISOString().split('T')[0];
-            const targetMatch = issue.body.match(/⏰ Target 날짜[\s\S]*?\n+(\d{4}-\d{2}-\d{2})/);
+            const targetMatch = issue.body?.match(/⏰ Target 날짜[\s\S]*?\n+(\d{4}-\d{2}-\d{2})/);
             const targetDate = targetMatch ? targetMatch[1] : createdDate;
             const milestone = issue.milestone ? issue.milestone.title : null;
 
@@ -110,8 +40,8 @@ jobs:
                 headers: notionHeaders,
                 body: JSON.stringify({
                   filter: {
-                    property: "Name",
-                    title: { equals: issue.title }
+                    property: "Issue",
+                    title: { equals: `#${issue.number}` }
                   }
                 })
               });
@@ -120,11 +50,20 @@ jobs:
             };
 
             if (action === "opened") {
+              const existingPageId = await findNotionPage();
+              if (existingPageId) {
+                console.log(`⚠️ 이미 등록된 이슈입니다: #${issue.number}`);
+                return;
+              }
+
               const notionBody = {
                 parent: { database_id: process.env.NOTION_DATABASE_ID },
                 properties: {
-                  Name: {
-                    title: [{ text: { content: issue.title } }]
+                  Issue: {
+                    title: [{ text: { content: `#${issue.number}` } }]
+                  },
+                  "Issue Title": {
+                    rich_text: [{ text: { content: issue.title } }]
                   },
                   Date: {
                     date: { start: createdDate, end: targetDate }
@@ -245,4 +184,68 @@ jobs:
                 throw new Error(`❌ reopen 반영 실패: ${res.status} ${error}`);
               }
               console.log(`✅ reopen → Status: Todo 반영 완료`);
+            }
+
+            if (context.eventName === "pull_request" && context.payload.action === "closed") {
+              const pr = context.payload.pull_request;
+              const prBody = pr.body || "";
+              const prUrl = pr.html_url;
+              const issueMatches = prBody.match(/(?:Fixes|Closes|Resolves):? #\d+/gi);
+              if (!issueMatches) return;
+
+              for (const match of issueMatches) {
+                const issueNumber = match.match(/\d+/)[0];
+
+                const issueRes = await fetch(`https://api.github.com/repos/${context.repo.owner}/${context.repo.repo}/issues/${issueNumber}`, {
+                  headers: { Authorization: `Bearer ${process.env.GH_TOKEN}` }
+                });
+                const issueData = await issueRes.json();
+
+                const notionSearch = await fetch("https://api.notion.com/v1/databases/" + process.env.NOTION_DATABASE_ID + "/query", {
+                  method: "POST",
+                  headers: notionHeaders,
+                  body: JSON.stringify({
+                    filter: {
+                      property: "Issue",
+                      title: { equals: `#${issueNumber}` }
+                    }
+                  })
+                });
+                const notionResult = await notionSearch.json();
+                if (notionResult.results.length === 0) continue;
+
+                const pageId = notionResult.results[0].id;
+
+                const notionPage = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+                  method: "GET",
+                  headers: notionHeaders
+                });
+                const notionData = await notionPage.json();
+                const existingPRText = notionData.properties?.PR_URL?.rich_text?.map(rt => rt.plain_text).join('\n') || "";
+                const updatedText = existingPRText
+                  ? `${existingPRText}\n${prUrl}`
+                  : prUrl;
+
+                const updateRes = await fetch("https://api.notion.com/v1/pages/" + pageId, {
+                  method: "PATCH",
+                  headers: notionHeaders,
+                  body: JSON.stringify({
+                    properties: {
+                      PR_URL: {
+                        rich_text: updatedText.split('\n').map(url => ({ text: { content: url } }))
+                      },
+                      Status: {
+                        select: { name: "Done" }
+                      }
+                    }
+                  })
+                });
+
+                if (!updateRes.ok) {
+                  const errorText = await updateRes.text();
+                  throw new Error(`❌ PR URL 저장 실패: ${updateRes.status} ${errorText}`);
+                } else {
+                  console.log(`✅ PR URL 저장 완료: ${prUrl}`);
+                }
+              }
             }
