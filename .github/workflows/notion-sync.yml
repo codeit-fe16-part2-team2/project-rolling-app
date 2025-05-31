@@ -40,8 +40,8 @@ jobs:
                 headers: notionHeaders,
                 body: JSON.stringify({
                   filter: {
-                    property: "Issue",
-                    title: { equals: `#${issue.number}` }
+                    property: "Issue Number",
+                    rich_text: { equals: `#${issue.number}` }
                   }
                 })
               });
@@ -60,10 +60,10 @@ jobs:
                 parent: { database_id: process.env.NOTION_DATABASE_ID },
                 properties: {
                   Issue: {
-                    title: [{ text: { content: `#${issue.number}` } }]
+                    title: [{ text: { content: issue.title } }]
                   },
-                  "Issue Title": {
-                    rich_text: [{ text: { content: issue.title } }]
+                  "Issue Number": {
+                    rich_text: [{ text: { content: `#${issue.number}` } }]
                   },
                   Date: {
                     date: { start: createdDate, end: targetDate }
@@ -206,8 +206,8 @@ jobs:
                   headers: notionHeaders,
                   body: JSON.stringify({
                     filter: {
-                      property: "Issue",
-                      title: { equals: `#${issueNumber}` }
+                      property: "Issue Number",
+                      rich_text: { equals: `#${issueNumber}` }
                     }
                   })
                 });
