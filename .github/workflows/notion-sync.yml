@@ -72,9 +72,13 @@ jobs:
               // ✅ Add Milestone if exists
               if (milestone) {
                 notionBody.properties.Milestone = {
-                  select: {
-                    name: milestone
-                  }
+                  rich_text: [
+                    {
+                      text: {
+                        content: milestone
+                      }
+                    }
+                  ]
                 };
               }
 
