@@ -2,7 +2,7 @@ name: Issue → Notion Sync
 
 on:
   issues:
-    types: [opened, labeled, unlabeled, milestoned, demilestoned]
+    types: [opened, labeled, unlabeled, milestoned, demilestoned, closed, reopened]
   pull_request:
     types: [closed]
 
@@ -24,11 +24,8 @@ jobs:
             const action = context.payload.action;
 
             const createdDate = new Date(issue.created_at).toISOString().split('T')[0];
-
-            // ✅ Extract Target Date from Issue Template
             const targetMatch = issue.body.match(/⏰ Target 날짜[\s\S]*?\n+(\d{4}-\d{2}-\d{2})/);
             const targetDate = targetMatch ? targetMatch[1] : createdDate;
-
             const milestone = issue.milestone ? issue.milestone.title : null;
 
             const notionHeaders = {
@@ -37,46 +34,43 @@ jobs:
               "Content-Type": "application/json"
             };
 
-            // ✅ Handle issue creation
+            const findNotionPage = async () => {
+              const res = await fetch("https://api.notion.com/v1/databases/" + process.env.NOTION_DATABASE_ID + "/query", {
+                method: "POST",
+                headers: notionHeaders,
+                body: JSON.stringify({
+                  filter: {
+                    property: "Name",
+                    title: { equals: issue.title }
+                  }
+                })
+              });
+              const data = await res.json();
+              return data.results.length > 0 ? data.results[0].id : null;
+            };
+
+            // 1. 이슈 생성
             if (action === "opened") {
               const notionBody = {
                 parent: { database_id: process.env.NOTION_DATABASE_ID },
                 properties: {
                   Name: {
-                    title: [
-                      {
-                        text: {
-                          content: issue.title
-                        }
-                      }
-                    ]
+                    title: [{ text: { content: issue.title } }]
                   },
                   Date: {
-                    date: {
-                      start: createdDate,
-                      end: targetDate
-                    }
+                    date: { start: createdDate, end: targetDate }
                   },
                   Status: {
-                    select: {
-                      name: "Todo"
-                    }
+                    select: { name: "Todo" }
                   },
                   URL: {
                     url: issue.html_url
                   }
                 }
               };
-
               if (milestone) {
                 notionBody.properties.Milestone = {
-                  rich_text: [
-                    {
-                      text: {
-                        content: milestone
-                      }
-                    }
-                  ]
+                  rich_text: [{ text: { content: milestone } }]
                 };
               }
 
@@ -87,109 +81,103 @@ jobs:
               });
 
               if (!res.ok) {
-                const errorText = await res.text();
-                throw new Error(`❌ Notion 등록 실패: ${res.status} ${errorText}`);
-              } else {
-                console.log(`✅ Notion에 등록 완료: ${issue.title}`);
+                const error = await res.text();
+                throw new Error(`❌ Notion 등록 실패: ${res.status} ${error}`);
               }
+              console.log(`✅ Notion에 등록 완료: ${issue.title}`);
             }
 
-            // ✅ Handle Status update via labels
+            // 2. 라벨에 따라 Status 변경
             if (action === "labeled" || action === "unlabeled") {
               const label = context.payload.label.name;
-              const allowedStatuses = ["Todo", "In Progress", "Done"];
-              if (allowedStatuses.includes(label)) {
-                const notionSearch = await fetch("https://api.notion.com/v1/databases/" + process.env.NOTION_DATABASE_ID + "/query", {
-                  method: "POST",
-                  headers: notionHeaders,
-                  body: JSON.stringify({
-                    filter: {
-                      property: "Name",
-                      title: {
-                        equals: issue.title
-                      }
-                    }
-                  })
-                });
+              const allowed = ["Todo", "In Progress", "Done"];
+              if (!allowed.includes(label)) return;
 
-                const notionResult = await notionSearch.json();
-                if (notionResult.results.length > 0) {
-                  const pageId = notionResult.results[0].id;
+              const pageId = await findNotionPage();
+              if (!pageId) return;
 
-                  const updateRes = await fetch("https://api.notion.com/v1/pages/" + pageId, {
-                    method: "PATCH",
-                    headers: notionHeaders,
-                    body: JSON.stringify({
-                      properties: {
-                        Status: {
-                          select: {
-                            name: label
-                          }
-                        }
-                      }
-                    })
-                  });
-
-                  if (!updateRes.ok) {
-                    const errorText = await updateRes.text();
-                    throw new Error(`❌ Status 업데이트 실패: ${updateRes.status} ${errorText}`);
-                  } else {
-                    console.log(`✅ Notion Status 업데이트 완료: ${label}`);
-                  }
-                }
-              }
-            }
-
-            // ✅ Handle Milestone assignment/removal
-            if (action === "milestoned" || action === "demilestoned") {
-              const milestoneName = issue.milestone ? issue.milestone.title : null;
-
-              const notionSearch = await fetch("https://api.notion.com/v1/databases/" + process.env.NOTION_DATABASE_ID + "/query", {
-                method: "POST",
+              const res = await fetch("https://api.notion.com/v1/pages/" + pageId, {
+                method: "PATCH",
                 headers: notionHeaders,
                 body: JSON.stringify({
-                  filter: {
-                    property: "Name",
-                    title: {
-                      equals: issue.title
-                    }
+                  properties: {
+                    Status: { select: { name: label } }
                   }
                 })
               });
 
-              const notionResult = await notionSearch.json();
-              if (notionResult.results.length > 0) {
-                const pageId = notionResult.results[0].id;
+              if (!res.ok) {
+                const error = await res.text();
+                throw new Error(`❌ Status 업데이트 실패: ${res.status} ${error}`);
+              }
+              console.log(`✅ Status 동기화 완료: ${label}`);
+            }
 
-                const updatePayload = {
+            // 3. 마일스톤 변경
+            if (action === "milestoned" || action === "demilestoned") {
+              const milestoneName = issue.milestone ? issue.milestone.title : null;
+              const pageId = await findNotionPage();
+              if (!pageId) return;
+
+              const res = await fetch("https://api.notion.com/v1/pages/" + pageId, {
+                method: "PATCH",
+                headers: notionHeaders,
+                body: JSON.stringify({
                   properties: {
                     Milestone: milestoneName
-                      ? {
-                          rich_text: [
-                            {
-                              text: {
-                                content: milestoneName
-                              }
-                            }
-                          ]
-                        }
-                      : {
-                          rich_text: []
-                        }
+                      ? { rich_text: [{ text: { content: milestoneName } }] }
+                      : { rich_text: [] }
                   }
-                };
+                })
+              });
 
-                const updateRes = await fetch("https://api.notion.com/v1/pages/" + pageId, {
-                  method: "PATCH",
-                  headers: notionHeaders,
-                  body: JSON.stringify(updatePayload)
-                });
-
-                if (!updateRes.ok) {
-                  const errorText = await updateRes.text();
-                  throw new Error(`❌ Milestone 업데이트 실패: ${updateRes.status} ${errorText}`);
-                } else {
-                  console.log(`✅ Notion Milestone 업데이트 완료: ${milestoneName ?? "제거됨"}`);
-                }
+              if (!res.ok) {
+                const error = await res.text();
+                throw new Error(`❌ Milestone 업데이트 실패: ${res.status} ${error}`);
               }
+              console.log(`✅ Milestone 업데이트 완료: ${milestoneName ?? "제거됨"}`);
+            }
+
+            // 4. 이슈 수동 종료
+            if (action === "closed") {
+              const pageId = await findNotionPage();
+              if (!pageId) return;
+
+              const res = await fetch("https://api.notion.com/v1/pages/" + pageId, {
+                method: "PATCH",
+                headers: notionHeaders,
+                body: JSON.stringify({
+                  properties: {
+                    Status: { select: { name: "Done" } }
+                  }
+                })
+              });
+
+              if (!res.ok) {
+                const error = await res.text();
+                throw new Error(`❌ 수동 종료 반영 실패: ${res.status} ${error}`);
+              }
+              console.log(`✅ 이슈 종료 → Status: Done`);
+            }
+
+            // 5. reopen → Status: Todo
+            if (action === "reopened") {
+              const pageId = await findNotionPage();
+              if (!pageId) return;
+
+              const res = await fetch("https://api.notion.com/v1/pages/" + pageId, {
+                method: "PATCH",
+                headers: notionHeaders,
+                body: JSON.stringify({
+                  properties: {
+                    Status: { select: { name: "Todo" } }
+                  }
+                })
+              });
+
+              if (!res.ok) {
+                const error = await res.text();
+                throw new Error(`❌ reopen 반영 실패: ${res.status} ${error}`);
+              }
+              console.log(`✅ reopen → Status: Todo 반영 완료`);
             }
