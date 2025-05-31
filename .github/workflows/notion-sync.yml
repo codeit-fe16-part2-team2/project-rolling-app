@@ -2,7 +2,7 @@ name: Issue → Notion Sync
 
 on:
   issues:
-    types: [opened, labeled, unlabeled]
+    types: [opened, labeled, unlabeled, milestoned, demilestoned]
   pull_request:
     types: [closed]
 
@@ -25,11 +25,10 @@ jobs:
 
             const createdDate = new Date(issue.created_at).toISOString().split('T')[0];
 
-            // ✅ Extract Target Date from Issue Template (based on label header)
+            // ✅ Extract Target Date from Issue Template
             const targetMatch = issue.body.match(/⏰ Target 날짜[\s\S]*?\n+(\d{4}-\d{2}-\d{2})/);
             const targetDate = targetMatch ? targetMatch[1] : createdDate;
 
-            // ✅ Extract milestone title if exists
             const milestone = issue.milestone ? issue.milestone.title : null;
 
             const notionHeaders = {
@@ -69,7 +68,6 @@ jobs:
                 }
               };
 
-              // ✅ Add Milestone if exists
               if (milestone) {
                 notionBody.properties.Milestone = {
                   rich_text: [
@@ -96,7 +94,7 @@ jobs:
               }
             }
 
-            // ✅ Handle label updates → sync to Notion Status
+            // ✅ Handle Status update via labels
             if (action === "labeled" || action === "unlabeled") {
               const label = context.payload.label.name;
               const allowedStatuses = ["Todo", "In Progress", "Done"];
@@ -138,6 +136,60 @@ jobs:
                   } else {
                     console.log(`✅ Notion Status 업데이트 완료: ${label}`);
                   }
+                }
+              }
+            }
+
+            // ✅ Handle Milestone assignment/removal
+            if (action === "milestoned" || action === "demilestoned") {
+              const milestoneName = issue.milestone ? issue.milestone.title : null;
+
+              const notionSearch = await fetch("https://api.notion.com/v1/databases/" + process.env.NOTION_DATABASE_ID + "/query", {
+                method: "POST",
+                headers: notionHeaders,
+                body: JSON.stringify({
+                  filter: {
+                    property: "Name",
+                    title: {
+                      equals: issue.title
+                    }
+                  }
+                })
+              });
+
+              const notionResult = await notionSearch.json();
+              if (notionResult.results.length > 0) {
+                const pageId = notionResult.results[0].id;
+
+                const updatePayload = {
+                  properties: {
+                    Milestone: milestoneName
+                      ? {
+                          rich_text: [
+                            {
+                              text: {
+                                content: milestoneName
+                              }
+                            }
+                          ]
+                        }
+                      : {
+                          rich_text: []
+                        }
+                  }
+                };
+
+                const updateRes = await fetch("https://api.notion.com/v1/pages/" + pageId, {
+                  method: "PATCH",
+                  headers: notionHeaders,
+                  body: JSON.stringify(updatePayload)
+                });
+
+                if (!updateRes.ok) {
+                  const errorText = await updateRes.text();
+                  throw new Error(`❌ Milestone 업데이트 실패: ${updateRes.status} ${errorText}`);
+                } else {
+                  console.log(`✅ Notion Milestone 업데이트 완료: ${milestoneName ?? "제거됨"}`);
                 }
               }
             }
